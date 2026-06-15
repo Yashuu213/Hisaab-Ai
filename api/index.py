@@ -84,6 +84,26 @@ class TrainingData(db.Model):
     target_category = db.Column(db.String(50))
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
 
+class Nudge(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    receiver_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    amount = db.Column(db.Float)
+    message = db.Column(db.String(200))
+    is_read = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    sender = db.relationship('User', foreign_keys=[sender_id])
+
+class Message(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    receiver_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    sender = db.relationship('User', foreign_keys=[sender_id])
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
@@ -441,6 +461,121 @@ def delete_vocabulary(id):
     db.session.commit()
     return jsonify({'message': 'Rule deleted'})
 
+# --- Social & Connectivity Features ---
+
+@app.route('/api/users', methods=['GET'])
+@login_required
+def get_users():
+    # Find all users except current one
+    users = User.query.filter(User.id != current_user.id).all()
+    return jsonify([{
+        'id': u.id,
+        'username': u.username,
+        'email': u.email
+    } for u in users])
+
+@app.route('/api/nudges', methods=['GET', 'POST'])
+@login_required
+def handle_nudges():
+    if request.method == 'POST':
+        data = request.json
+        receiver_id = data.get('receiver_id')
+        if not receiver_id:
+            return jsonify({'error': 'Receiver required'}), 400
+            
+        new_nudge = Nudge(
+            sender_id=current_user.id,
+            receiver_id=receiver_id,
+            amount=data.get('amount'),
+            message=data.get('message')
+        )
+        db.session.add(new_nudge)
+        db.session.commit()
+        return jsonify({'message': 'Nudge sent successfully'})
+    
+    else:
+        # Get nudges for current user
+        nudges = Nudge.query.filter_by(receiver_id=current_user.id, is_read=False).order_by(Nudge.created_at.desc()).all()
+        return jsonify([{
+            'id': n.id,
+            'sender_name': n.sender.username,
+            'amount': n.amount,
+            'message': n.message,
+            'date': n.created_at.isoformat()
+        } for n in nudges])
+
+@app.route('/api/nudges/read/<int:id>', methods=['POST'])
+@login_required
+def mark_nudge_read(id):
+    nudge = Nudge.query.get_or_404(id)
+    if nudge.receiver_id == current_user.id:
+        nudge.is_read = True
+        db.session.commit()
+    return jsonify({'message': 'Nudge marked read'})
+
+@app.route('/api/messages', methods=['POST'])
+@login_required
+def send_message():
+    data = request.json
+    receiver_id = data.get('receiver_id')
+    content = data.get('content')
+    
+    if not receiver_id or not content:
+        return jsonify({'error': 'Receiver and content required'}), 400
+        
+    new_msg = Message(
+        sender_id=current_user.id,
+        receiver_id=receiver_id,
+        content=content
+    )
+    db.session.add(new_msg)
+    db.session.commit()
+    return jsonify({
+        'message': 'Message sent',
+        'id': new_msg.id,
+        'sender_id': new_msg.sender_id,
+        'content': new_msg.content,
+        'date': new_msg.created_at.isoformat()
+    })
+
+@app.route('/api/messages/<int:friend_id>', methods=['GET'])
+@login_required
+def get_messages(friend_id):
+    try:
+        # Fetch messages between current user and friend
+        messages = Message.query.filter(
+            ((Message.sender_id == current_user.id) & (Message.receiver_id == friend_id)) |
+            ((Message.sender_id == friend_id) & (Message.receiver_id == current_user.id))
+        ).order_by(Message.created_at.asc()).all()
+        
+        result = [{
+            'id': m.id,
+            'sender_id': m.sender_id,
+            'content': m.content,
+            'date': m.created_at.isoformat()
+        } for m in messages]
+        
+        # EPHEMERAL LOGIC: Delete messages sent to the current user once they are read
+        received_messages = [m for m in messages if m.receiver_id == current_user.id]
+        if received_messages:
+            for m in received_messages:
+                db.session.delete(m)
+            db.session.commit()
+            
+        return jsonify(result)
+    except Exception as e:
+        db.session.rollback()
+        print(f"Chat fetch error: {e}")
+        return jsonify([]), 500
+
+@app.route('/api/messages/cleanup', methods=['POST'])
+@login_required
+def cleanup_chat():
+    # Explicitly clear messages for current user
+    Message.query.filter_by(receiver_id=current_user.id).delete()
+    db.session.commit()
+    return jsonify({'message': 'Inbox cleared'})
+
 @app.route('/api/ai_parse', methods=['POST'])
 @login_required
 def ai_parse():
@@ -568,6 +703,17 @@ def ai_parse():
                 found_category = cat
                 break
 
+        clean_seg = re.sub(r'\b(rs|rupee|rupees|rupya|rupaye)\b', '', seg).strip()
+        words = re.findall(r'\b\s?[\w-]+\b', clean_seg)
+        
+        # Priority 1: Marker-based (Vocabulary-Agnostic)
+        marker_match = re.search(r'([\w-]+)\s+(ko|ne|se)\b', clean_seg)
+        if marker_match:
+            potential = marker_match.group(1).lower()
+            if potential not in STOP_WORDS and potential not in ALL_CAT_KEYWORDS and not potential.isdigit():
+                person_name = potential.capitalize()
+                found_via_marker = True
+
         # D. DETECT TYPE (Hinglish Decision Tree)
         if re.search(r'\bne\b.*(?:diya|diye|mila)\b', seg) or re.search(r'\bse\b.*\bliya\b', seg) or re.search(r'\bborrowed\b', seg) or re.search(r'\bse\b.*\bmile\b', seg):
             is_debt = True
@@ -584,18 +730,7 @@ def ai_parse():
         elif re.search(r'\bmujhe\b.*(?:mila|diya|diye|mile)\b', seg) or any(re.search(fr'\b{kw}\b', seg) for kw in ['salary', 'income', 'profit', 'mila', 'aaye', 'credited']):
             is_income = True
 
-        # D. POSITION-INDEPENDENT NAME EXTRACTION (Agnostic v4)
-        clean_seg = re.sub(r'\b(rs|rupee|rupees|rupya|rupaye)\b', '', seg).strip()
-        words = re.findall(r'\b\s?[\w-]+\b', clean_seg)
-        
-        # Priority 1: Marker-based (Vocabulary-Agnostic)
-        marker_match = re.search(r'([\w-]+)\s+(ko|ne|se)\b', clean_seg)
-        if marker_match:
-            potential = marker_match.group(1).lower()
-            if potential not in STOP_WORDS and potential not in ALL_CAT_KEYWORDS and not potential.isdigit():
-                person_name = potential.capitalize()
-                found_via_marker = True
-
+        # E. POSITION-INDEPENDENT NAME EXTRACTION (Agnostic v4)
         # Priority 2: Vocabulary-based (Safety Net for marker-less)
         if not person_name:
             for w in words:
@@ -615,15 +750,16 @@ def ai_parse():
         # F. CLEAN DESCRIPTION (Segment Deletion)
         desc_parts = []
         for w in words:
+            w_clean = w.strip().lower()
             # 1. Skip amount
-            if w == str(int(amount)) or w == f"{amount:.1f}": continue
+            if w_clean == str(int(amount)) or w_clean == f"{amount:.1f}": continue
             # 2. Skip person_name
-            if person_name and w.lower() == person_name.lower(): continue
+            if person_name and w_clean == person_name.lower(): continue
             # 3. Skip pure stop-words
-            if w in STOP_WORDS: continue
+            if w_clean in STOP_WORDS: continue
             # 4. Skip marker words
-            if w in ['liye', 'ke', 'ka', 'ki', 'ne', 'se', 'ko', 'diya', 'diye', 'liya', 'mila', 'mile']: continue
-            desc_parts.append(w)
+            if w_clean in ['liye', 'ke', 'ka', 'ki', 'ne', 'se', 'ko', 'diya', 'diye', 'liya', 'mila', 'mile']: continue
+            desc_parts.append(w.strip())
         
         final_description = " ".join(desc_parts).strip()
         if not final_description:

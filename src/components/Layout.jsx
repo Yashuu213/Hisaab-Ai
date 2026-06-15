@@ -1,7 +1,7 @@
 import React, { useContext } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { TransactionContext } from '../context/TransactionContext';
-import { LayoutDashboard, PieChart, Wallet, LogOut, Sun, Moon, Brain, Sparkles, UserX } from 'lucide-react';
+import { LayoutDashboard, PieChart, Wallet, LogOut, Sun, Moon, Brain, Sparkles, UserX, Users } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const Layout = ({ children }) => {
@@ -32,6 +32,7 @@ const Layout = ({ children }) => {
                                 { path: '/analysis', label: 'Treasury', icon: PieChart },
                                 { path: '/lending', label: 'Ledger', icon: Wallet },
                                 { path: '/bot-training', label: 'Bot Brain', icon: Brain },
+                                { path: '/friends', label: 'Friends', icon: Users },
                             ].map((item) => (
                                 <Link 
                                     key={item.path}
@@ -103,6 +104,7 @@ const Layout = ({ children }) => {
                         { path: '/analysis', label: 'Analysis', icon: PieChart },
                         { path: '/lending', label: 'Ledger', icon: Wallet },
                         { path: '/bot-training', label: 'Brain', icon: Brain },
+                        { path: '/friends', label: 'Friends', icon: Users },
                     ].map((item) => (
                         <Link
                             key={item.path}

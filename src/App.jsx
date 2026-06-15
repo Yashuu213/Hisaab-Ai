@@ -8,6 +8,7 @@ import Lending from './pages/Lending';
 import BotTraining from './pages/BotTraining';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import Friends from './pages/Friends';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useContext(TransactionContext);
@@ -52,6 +53,12 @@ function App() {
           <Route path="/bot-training" element={
             <ProtectedRoute>
               <BotTraining />
+            </ProtectedRoute>
+          } />
+          
+          <Route path="/friends" element={
+            <ProtectedRoute>
+              <Friends />
             </ProtectedRoute>
           } />
         </Routes>

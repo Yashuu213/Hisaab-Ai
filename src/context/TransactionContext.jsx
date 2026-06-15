@@ -9,6 +9,8 @@ export const TransactionProvider = ({ children }) => {
     const [vpa, setVpa] = useState(localStorage.getItem('userVpa') || '');
     const [loading, setLoading] = useState(true);
     const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
+    const [nudges, setNudges] = useState([]);
+    const [appUsers, setAppUsers] = useState([]);
 
     // Update theme class on body
     useEffect(() => {
@@ -30,9 +32,13 @@ export const TransactionProvider = ({ children }) => {
         if (user) {
             fetchTransactions();
             fetchDebts();
+            fetchNudges();
+            fetchAppUsers();
         } else {
             setTransactions([]);
             setDebts([]);
+            setNudges([]);
+            setAppUsers([]);
         }
     }, [user]);
 
@@ -276,6 +282,84 @@ export const TransactionProvider = ({ children }) => {
         return Object.values(peopleMap);
     };
 
+    // --- New Social Methods ---
+    const fetchAppUsers = async () => {
+        try {
+            const res = await fetch('/api/users');
+            if (res.ok) {
+                const data = await res.json();
+                setAppUsers(data);
+            }
+        } catch (err) {
+            console.error("Failed to fetch users", err);
+        }
+    };
+
+    const fetchNudges = async () => {
+        try {
+            const res = await fetch('/api/nudges');
+            if (res.ok) {
+                const data = await res.json();
+                setNudges(data);
+            }
+        } catch (err) {
+            console.error("Failed to fetch nudges", err);
+        }
+    };
+
+    const sendNudge = async (receiverId, amount, message) => {
+        try {
+            const res = await fetch('/api/nudges', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ receiver_id: receiverId, amount, message })
+            });
+            return res.ok;
+        } catch (err) {
+            console.error("Failed to send nudge", err);
+            return false;
+        }
+    };
+
+    const markNudgeRead = async (id) => {
+        try {
+            await fetch(`/api/nudges/read/${id}`, { method: 'POST' });
+            setNudges(prev => prev.filter(n => n.id !== id));
+        } catch (err) {
+            console.error("Failed to mark nudge read", err);
+        }
+    };
+
+    const sendMessage = async (receiverId, content) => {
+        try {
+            const res = await fetch('/api/messages', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ receiver_id: receiverId, content })
+            });
+            if (res.ok) {
+                return await res.json();
+            }
+            return null;
+        } catch (err) {
+            console.error("Failed to send message", err);
+            return null;
+        }
+    };
+
+    const getMessages = async (friendId) => {
+        try {
+            const res = await fetch(`/api/messages/${friendId}`);
+            if (res.ok) {
+                return await res.json();
+            }
+            return [];
+        } catch (err) {
+            console.error("Failed to fetch messages", err);
+            return [];
+        }
+    };
+
     return (
         <TransactionContext.Provider value={{
             user,
@@ -302,7 +386,14 @@ export const TransactionProvider = ({ children }) => {
             },
             getPersonBalance,
             getPeopleBalances,
-            clearPersonDebts
+            clearPersonDebts,
+            appUsers,
+            nudges,
+            fetchNudges,
+            sendNudge,
+            markNudgeRead,
+            sendMessage,
+            getMessages
         }}>
             {children}
         </TransactionContext.Provider>
